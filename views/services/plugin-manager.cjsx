@@ -144,17 +144,17 @@ class PluginManager
 
   # get the mirrors
   # @return {Promise<Array<Object>>}
-  getMirrors: async ->
+  getMirrors: ->
     if @mirrors_ != null
       return Promise.resolve @mirrors_
     else
-      yield @readMirrors()
+      return @readMirrors()
 
   # get the selected mirror
   # @return {Promise<Object>}
   getConf: async ->
     yield @getMirrors()
-    return Promise.resolve @config_
+    return @config_
 
   # get installed plugins
   # @return {Promise<Array<Plugin>>}
@@ -188,12 +188,12 @@ class PluginManager
   # get all valid plugins, see comment of @isValid_
   # @return {Promise<Array<Plugin>>}
   getValidPlugins: ->
-    @getFilteredPlugins_ @isValid_.bind @
+    @getFilteredPlugins_ @isValid_.bind this
 
   # get all plugins met requirement
   # @return {Promise<Array<Plugin>>}
   getMetRequirementPlugins: ->
-    @getFilteredPlugins_ @isMetRequirement_.bind @
+    @getFilteredPlugins_ @isMetRequirement_.bind this
 
   # get all plugins that are outdated
   # @return {Plugin<Array<Plugin>>}
@@ -231,6 +231,7 @@ class PluginManager
         icon: path.join(ROOT, 'assets', 'img', 'material', '7_big.png')
         audio: "file://#{ROOT}/assets/audio/update.mp3"
     return outdatedPlugins
+
   # get all plugins which match a filer function
   # @param {!function(Plugin): boolean} filter
   # @return {Promise<Array<Plugin>>}
