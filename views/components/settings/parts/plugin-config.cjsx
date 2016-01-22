@@ -87,6 +87,7 @@ PluginConfig = React.createClass
         PluginManager.disablePlugin plugin
     @updateFromPluginManager()
   handleInstall: async (name) ->
+    name = name.trim()
     if !@props.disabled
       installingPluginNames = @state.installingPluginNames
       installingPluginNames.push name

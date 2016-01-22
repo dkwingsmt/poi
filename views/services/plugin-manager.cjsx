@@ -1,10 +1,10 @@
 Promise = require 'bluebird'
 path = require 'path-extra'
 semver = require 'semver'
-npm = require 'npm'
 async = Promise.coroutine
 React = require 'react'
 fs = Promise.promisifyAll require 'fs-extra'
+child_process = require 'child_process'
 __ = i18n.setting.__.bind(i18n.setting)
 __n = i18n.setting.__n.bind(i18n.setting)
 
@@ -14,6 +14,24 @@ globAsync = Promise.promisify require 'glob'
 utils = remote.require './lib/utils'
 
 {config, language, notify} = window
+
+npmPath = path.join window.ROOT, 'node_modules', 'npm', 'bin', 'npm-cli.js'
+
+npmCommand = (args, options) ->
+  new Promise (resolve) ->
+    proc = child_process.fork npmPath, args, options
+    proc.on 'exit', -> resolve()
+
+# Suppress stdout, stores it into a string and resolve with it
+npmCommandOutput = (args, options) ->
+  new Promise (resolve) ->
+    proc = child_process.fork npmPath, args, Object.assign({silent: true}, options)
+    data = ''
+    proc.stdout.on 'readable', ->
+      while (chunk = proc.stdout.read()) != null
+        data += chunk
+    proc.on 'exit', -> resolve(data)
+
 
 # dummy class, no plugin is created by call the constructor
 class Plugin
@@ -104,26 +122,19 @@ class PluginManager
   # select a mirror and set proxy config
   # @param {object, object, object} mirror name, is proxy enabled, is check beta plugin
   # @return {Promise<Object>} return the npm config
-  selectConfig: async (name, enable, check) ->
+  selectConfig: async (name, useProxy, checkBeta) ->
     yield @getMirrors()
     if name?
       @config_.mirror = @mirrors_[name]
       config.set "packageManager.mirrorName", name
-    if enable?
-      @config_.proxy = enable
-      config.set "packageManager.proxy", enable
-    if check?
-      @config_.betaCheck = check
-      config.set "packageManager.enableBetaPluginCheck", check
-    npmConfig =
-      prefix: PLUGIN_PATH
-      registry: @config_.mirror.server
-    if @config_.proxy
-      npmConfig.http_proxy = 'http://127.0.0.1:12450'
-    else
-      if npmConfig.http_proxy?
-        delete npmConfig.http_proxy
-    yield Promise.promisify(npm.load)(npmConfig)
+    if useProxy?
+      @config_.http_proxy = 'http://127.0.0.1:12450'
+      config.set "packageManager.proxy", useProxy
+    if checkBeta?
+      @config_.betaCheck = checkBeta
+      config.set "packageManager.enableBetaPluginCheck", checkBeta
+    @config_.prefix = PLUGIN_PATH
+    @config_.registry = @config_.mirror.server
     return @config_
 
   # get the current plugins
@@ -205,7 +216,13 @@ class PluginManager
     outdatedList = []
     tasks = plugins.map async (plugin) =>
       try
-        distTag = yield Promise.promisify(npm.commands.distTag)(['ls', plugin.packageName])
+        distTagText = yield npmCommandOutput [
+          'dist-tag', 'ls', plugin.packageName,
+          '--registry', @config_.registry],
+          cwd: @config_.prefix
+        distTag = _.object(distTagText.split('\n').filter(Boolean).map((s) -> 
+          s.split(': ')))
+        # e.g. distTag = {beta: '1.7.0-beta.0', latest: '1.7.0'}
         latest = "#{plugin.version}"
         if @config_.betaCheck && distTag.beta?
           if semver.gt distTag.beta, latest
@@ -222,6 +239,7 @@ class PluginManager
           @plugins_[index]?.lastestVersion = latest
           if plugin.isRead then outdatedList.push plugin.stringName
       catch error
+        log 'distTag error: ', error, error.stack
     yield Promise.all(tasks)
     if isNotif && outdatedList.length > 0
       content = "#{outdatedList.join(' ')} #{__ "have newer version. Please update your plugins."}"
@@ -298,7 +316,12 @@ class PluginManager
     yield @getMirrors()
     plugin.isUpdating = true
     try
-      yield Promise.promisify(npm.commands.install)(["#{plugin.packageName}@#{plugin.lastestVersion}"])
+      yield npmCommand [
+        'install', 
+        '--registry', @config_.registry,
+        '--production',
+        "#{plugin.packageName}@#{plugin.lastestVersion}"],
+        cwd: @config_.prefix
       plugin.isUpdating = false
       plugin.isOutdated = false
       plugin.version = plugin.lastestVersion
@@ -312,34 +335,22 @@ class PluginManager
   installPlugin: async (name) ->
     yield @getMirrors()
     try
-      packgaeName = null
-      data = yield Promise.promisify(npm.commands.install)([name])
-      validPlugins = yield @getValidPlugins()
-      # Make sure if the plugin is unavailable.
-      # if available, update information.
-      for packs in data[0]
-        dump = false
-        packName = packs[0].split('@')[0]
-        if packName.indexOf("poi-plugin") == -1
-          continue
-        packVersion = packs[0].split('@')[1]
-        for plugin_, index in validPlugins
-          if packName == plugin_.packageName
-            dump = true
-            validPlugins[index].version = packVersion
-            if semver.eq validPlugins[index].lastestVersion, packVersion
-              validPlugins[index].isOutdated = false
-            else if semver.gt validPlugins[index].lastestVersion, packVersion
-              validPlugins[index].isOutdated = true
-        if !dump
-          packgaeName = packName
-          break
-      if packgaeName?
-        plugin = null
-        plugin = @readPlugin_ path.join @pluginPath, 'node_modules', packgaeName
+      yield npmCommand ['install', '--registry', @config_.registry, '--production', name],
+        cwd: @config_.prefix
+      # Directly read version from package.json because npm is tooo slow
+      packageJsonPath = path.join @config_.prefix, 'node_modules', name, 'package.json'
+      packVersion = (yield fs.readJsonAsync packageJsonPath).version
+      plugin = (yield @getValidPlugins()).filter(
+        (plugin_) -> plugin_.packageName == name)[0]
+      if plugin
+        plugin.isOutdated = false
+        plugin.version = packVersion
+      else
+        plugin = @readPlugin_ path.join @pluginPath, 'node_modules', name
         @plugins_.push plugin
         @plugins_ = _.sortBy @plugins_, 'priority'
     catch error
+      console.log 'installError', error, error.stack
       throw error
 
   # uninstall one plugin, this won't unload it from memory
@@ -348,7 +359,8 @@ class PluginManager
   uninstallPlugin: async (plugin) ->
     yield @getMirrors()
     try
-      yield Promise.promisify(npm.commands.uninstall)([plugin.packageName])
+      yield npmCommand ['uninstall', plugin.packageName],
+        cwd: @config_.prefix
       for plugin_, index in @plugins_
         if plugin.packageName is plugin_.packageName
           @plugins_.splice(index, 1)
