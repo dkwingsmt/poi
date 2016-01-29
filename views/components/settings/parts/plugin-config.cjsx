@@ -160,16 +160,16 @@ InstalledPlugin = React.createClass
                 </Button>
               </OverlayTrigger>
             </ButtonGroup>
-            {
-              if plugin.settingsClass?
-                <CollapsiblePanel collapsible expanded={@state.settingOpen}
-                  style={margin: 0} >
-                  <PluginSettingWrap plugin={plugin} />
-                </CollapsiblePanel>
-            }
           </div>
         </Col>
       </Col>
+      {
+        if plugin.settingsClass?
+          <CollapsiblePanel collapsible expanded={@state.settingOpen}
+            style={margin: 0} >
+            <PluginSettingWrap plugin={plugin} />
+          </CollapsiblePanel>
+      }
     </Col>
 
 UninstalledPlugin = React.createClass
