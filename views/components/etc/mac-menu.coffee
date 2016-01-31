@@ -13,6 +13,11 @@ template = [
         label: 'About Poi'
         role: 'about'
       },
+      {
+        label: 'Settings'
+        accelerator: 'CmdOrCtrl+,'
+        click: ->
+      },
       { type: 'separator' },
       {
         label: 'Services'

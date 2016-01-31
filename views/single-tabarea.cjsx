@@ -24,14 +24,8 @@ ControlledTabArea = React.createClass
     key: 0
     pluginKey: -2
     dropdownOpen: false
-    nowTime: 0
     plugins: []
     tabbedPlugins: []
-  componentWillUpdate: (nextProps, nextState) ->
-    @nowTime = (new Date()).getTime()
-  componentDidUpdate: (prevProps, prevState) ->
-    cur = (new Date()).getTime()
-    console.log "the cost of tab-module's render: #{cur-@nowTime}ms" if process.env.DEBUG?
   renderPlugins: async ->
     plugins = yield PluginManager.getValidPlugins()
     plugins = plugins.filter (plugin) ->

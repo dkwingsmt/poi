@@ -8,6 +8,7 @@ fs = require 'fs-extra'
 {_, $, React, ReactBootstrap, FontAwesome} = window
 {Nav, NavItem, NavDropdown, MenuItem} = ReactBootstrap
 async = Promise.coroutine
+classnames = require 'classnames'
 
 $('poi-main').className += 'double-tabbed'
 window.doubleTabbed = true
@@ -21,9 +22,53 @@ PluginWrap = React.createClass
 settings = require path.join(ROOT, 'views', 'components', 'settings')
 mainview = require path.join(ROOT, 'views', 'components', 'main')
 
+TabContentsUnion = React.createClass
+  getInitialState: ->
+    nowKey: null
+
+  setNewKey: (key) ->
+    @setState
+      nowKey: key
+    @props.onNewKey? key
+
+  handleTabShow: (e) ->
+    key = e.detail.key
+    React.Children.forEach @props.children, (child) =>
+      if child.key == key
+        @setNewKey key
+
+  activeKey: ->
+    @state.nowKey || @props.children[0]?.key
+
+  setTabOffset: (offset) ->
+    return if !@props.children?
+    nowKey = @activeKey()
+    React.Children.forEach @props.children, (child, index) =>
+      if child.key == nowKey
+        nextIndex = (index+offset) % @props.children.length
+        @setNewKey @props.children[nextIndex].key
+
+  render: ->
+    showFirst = true
+    <div>
+    {
+      React.Children.map @props.children, (child) =>
+        # Show the first child at startup; o/w show the one with the correct key
+        show = if !@state.nowKey? then showFirst else @state.nowKey == child.key
+        showFirst = false
+        className = classnames
+          show: show
+          hide: !show
+        <div className={className}>
+          {child}
+        </div>
+    }
+    </div>
+
 lockedTab = false
 ControlledTabArea = React.createClass
   getInitialState: ->
+    activePluginName: null
     key: [0, 0]
     plugins: []
     tabbedPlugins: []
@@ -42,9 +87,29 @@ ControlledTabArea = React.createClass
     @setState {key} if key[0] isnt @state.key[0] or key[1] isnt @state.key[1]
   handleSelectLeft: (key) ->
     @handleSelect [key, @state.key[1]]
+    if key in [0,1]
+      eventKey = 'main'
+    else if key == 1000
+      eventKey = 'settings'
+    if eventKey?
+      event = new CustomEvent 'TabContentsUnion.show',
+        bubbles: true
+        cancelable: false
+        detail:
+          key: eventKey
+      window.dispatchEvent event
   handleSelectRight: (e, key) ->
     e.preventDefault()
-    @handleSelect [@state.key[0], key]
+    plugin = @state.plugins.find (p) -> p.name == key
+    return if !plugin?
+    if !plugin.handleClick?
+      @handleSelect [@state.key[0], key]
+      event = new CustomEvent 'TabContentsUnion.show',
+        bubbles: true
+        cancelable: false
+        detail:
+          key: key
+      window.dispatchEvent event
   handleSelectMainView: ->
     event = new CustomEvent 'view.main.visible',
       bubbles: true
@@ -54,6 +119,7 @@ ControlledTabArea = React.createClass
     window.dispatchEvent event
     @handleSelectLeft 0
   handleSelectShipView: ->
+    @refs.mainTabUnion.
     event = new CustomEvent 'view.main.visible',
       bubbles: true
       cancelable: false
@@ -73,9 +139,9 @@ ControlledTabArea = React.createClass
         if num <= 2 + @state.tabbedPlugins.length && num > 2
           @handleSelect [@state.key[0], num - 3]
   handleShiftTabKeyDown: ->
-    @handleSelect [@state.key[0], if @state.key[1]? then (@state.key[1] - 1 + @state.tabbedPlugins.length) % @state.tabbedPlugins.length else @state.tabbedPlugins.length - 1]
+    @refs.pluginTabUnion.setTabOffset -1
   handleTabKeyDown: ->
-    @handleSelect [@state.key[0], if @state.key[1]? then (@state.key[1] + 1) % @state.tabbedPlugins.length else 1]
+    @refs.pluginTabUnion.setTabOffset 1
   handleKeyDown: ->
     return if @listener?
     @listener = true
@@ -107,6 +173,8 @@ ControlledTabArea = React.createClass
   componentWillUnmount: ->
     window.removeEventListener 'PluginManager.PLUGIN_RELOAD', @renderPlugins
   render: ->
+    activePluginName = @state.activePluginName || @state.plugins[0]?.name
+    plugin = @state.plugins.find (p) => p.name == activePluginName
     <div className='poi-tabs-container'>
       <div>
         <Nav bsStyle="tabs" activeKey={@state.key[0]}>
@@ -120,37 +188,24 @@ ControlledTabArea = React.createClass
             {settings.displayName}
           </NavItem>
         </Nav>
-        <div id={mainview.name} className="poi-app-tabpane #{if @state.key[0] in [0, 1] then 'show' else 'hidden'}">
-          {
-            React.createElement mainview.reactClass,
-              selectedKey: @state.key[0]
-              index: 0
-          }
-        </div>
-        <div id={settings.name} className="poi-app-tabpane #{if @state.key[0] == 1000 then 'show' else 'hidden'}">
-          {
-            React.createElement settings.reactClass,
-              selectedKey: @state.key[0]
-              index: 1000
-          }
-        </div>
+        <TabContentsUnion ref='mainTabUnion'>
+          <div id={mainview.name} className="poi-app-tabpane" key='main'>
+            <mainview.reactClass />
+          </div>
+          <div id={settings.name} className="poi-app-tabpane" key='settings'>
+            <settings.reactClass />
+          </div>
+        </TabContentsUnion>
       </div>
       <div>
         <Nav bsStyle="tabs" activeKey={@state.key[1]} onSelect={@handleSelectRight}>
           <NavDropdown id='plugin-dropdown' key={-1} eventKey={-1} pullRight
-                       title={@state.tabbedPlugins[@state.key[1]]?.displayName || <span><FontAwesome name='sitemap' />{__ ' Plugins'}</span>}>
+                       title={plugin?.displayName || <span><FontAwesome name='sitemap' />{__ ' Plugins'}</span>}>
           {
-            counter = -1
-            @state.plugins.map (plugin, index) =>
-              if plugin.handleClick?
-                <MenuItem key={index} eventKey={@state.key[1]} onSelect={plugin.handleClick}>
-                  {plugin.displayName}
-                </MenuItem>
-              else
-                key = (counter += 1)
-                <MenuItem key={index} eventKey={key}>
-                  {plugin.displayName}
-                </MenuItem>
+            @state.plugins.map (plugin) =>
+              <MenuItem key={plugin.name} eventKey={plugin.name} onSelect={plugin.handleClick}>
+                {plugin.displayName}
+              </MenuItem>
           }
           {
             if @state.plugins.length == 0
@@ -159,15 +214,19 @@ ControlledTabArea = React.createClass
           </NavDropdown>
         </Nav>
         {
-          counter = -1
-          @state.plugins.map (plugin, index) =>
-            if !plugin.handleClick?
-              key = (counter += 1)
-              <div id={plugin.name} key={key} className="poi-app-tabpane #{if @state.key[1] == key then 'show' else 'hidden'}">
-                <PluginWrap plugin={plugin} selectedKey={@state.key[1]} index={key} />
+          <TabContentsUnion ref='pluginTabUnion'
+            onNewKey={(key) => @setState {activePluginName: key}}>
+          {
+            for plugin in @state.plugins when !plugin.handleClick?
+              <div id={plugin.name} key={plugin.name} className="poi-app-tabpane">
+                <PluginWrap plugin={plugin} />
               </div>
+          }
+          </TabContentsUnion>
         }
       </div>
     </div>
+  
+  
 
 module.exports = ControlledTabArea
